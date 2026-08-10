@@ -25,9 +25,8 @@ jobs:
       - name: Create Release Package
         run: |
           mkdir -p staging
-          cp target/release/ototune staging/
-          cp README.md install.sh staging/ 2>/dev/null || true
-          tar -czvf ototune-x86_64-unknown-linux-gnu.tar.gz -C staging .
+          cp target/release/ototune staging/ototune
+          tar -czvf ototune-x86_64-unknown-linux-gnu.tar.gz -C staging ototune
 
       - name: Generate Dynamic Changelog
         run: |
