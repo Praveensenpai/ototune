@@ -20,7 +20,12 @@ use std::{
 };
 
 #[derive(Parser, Debug)]
-#[command(name = "ototune", author = "Praveen Senpai", version = "0.1.0", about = "Minimal aesthetic Rust TUI MPD player tailored for daily listening and AJATT audio immersion")]
+#[command(
+    name = "ototune",
+    author = "Praveen Senpai",
+    version = "0.2.0",
+    about = "Minimal aesthetic Rust TUI MPD player tailored for daily listening and AJATT audio immersion"
+)]
 struct Args {
     /// MPD address (host:port or host)
     #[arg(short, long, default_value = "127.0.0.1:6600")]
@@ -37,6 +42,10 @@ struct Args {
     /// Resume playback from last saved position
     #[arg(short, long)]
     resume: bool,
+
+    /// Print version information (-v or -V or --version)
+    #[arg(short = 'v', short_alias = 'V', long = "version", action = clap::ArgAction::Version)]
+    version_flag: Option<bool>,
 }
 
 #[tokio::main]
@@ -76,7 +85,6 @@ async fn main() -> Result<()> {
     app.update_filtered_indices();
     app.browser_entries = controller.fetch_directory(&app.browser_path, app.show_hidden);
 
-    // Auto-resume from last saved position if Resume Mode is enabled & queue was empty
     if app.resume_mode && app.queue.is_empty() {
         if let Some(last_file) = app.persistent_state.last_file.clone() {
             let _ = controller.execute(MpdCommand::AddPath(last_file));
@@ -122,7 +130,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Save final state before exiting
     app.save_current_state();
 
     disable_raw_mode()?;
@@ -222,7 +229,6 @@ fn handle_key_event(app: &mut AppState, controller: &mut MpdController, key: cro
             app.set_notification("⏪ -5s");
         }
 
-        // Toggle Resume Mode ('m')
         KeyCode::Char('m') => {
             app.resume_mode = !app.resume_mode;
             app.save_current_state();
@@ -233,7 +239,6 @@ fn handle_key_event(app: &mut AppState, controller: &mut MpdController, key: cro
             }
         }
 
-        // Toggle Random & Repeat Mode
         KeyCode::Char('r') => {
             let _ = controller.execute(MpdCommand::ToggleRandom);
             app.status = controller.fetch_status();
@@ -253,7 +258,6 @@ fn handle_key_event(app: &mut AppState, controller: &mut MpdController, key: cro
             }
         }
 
-        // Context-Aware Immersion ('i' = active folder or current path; 'I' = global full library)
         KeyCode::Char('i') => {
             let target_path = if !app.browser_path.is_empty() {
                 Some(app.browser_path.clone())
