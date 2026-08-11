@@ -23,7 +23,7 @@ use std::{
 #[command(
     name = "ototune",
     author = "Praveen Senpai",
-    version = "0.2.0",
+    version = "0.2.2",
     about = "Minimal aesthetic Rust TUI MPD player tailored for daily listening and AJATT audio immersion"
 )]
 struct Args {
@@ -294,6 +294,11 @@ fn handle_key_event(app: &mut AppState, controller: &mut MpdController, key: cro
             } else {
                 app.set_notification("➡️ Single Track Loop Disabled");
             }
+        }
+
+        KeyCode::Char('u') | KeyCode::Char('U') => {
+            let _ = controller.execute(MpdCommand::UpdateDb);
+            app.set_notification("🔄 Triggered MPD Database Update");
         }
 
         KeyCode::Char('.') => {

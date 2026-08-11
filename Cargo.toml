@@ -1,6 +1,6 @@
 [package]
 name = "ototune"
-version = "0.2.0"
+version = "0.2.2"
 edition = "2021"
 authors = ["Praveen Senpai"]
 description = "Minimal aesthetic Rust TUI MPD player tailored for daily listening and AJATT audio immersion"

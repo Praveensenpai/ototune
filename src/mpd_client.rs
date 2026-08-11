@@ -69,6 +69,7 @@ pub enum MpdCommand {
     ToggleRandom,
     ToggleRepeat,
     SeekRelative(i64),
+    UpdateDb,
 }
 
 pub struct MpdController {
@@ -251,31 +252,53 @@ impl MpdController {
                 file: path.to_string(),
                 ..Default::default()
             };
-            let _ = client.push(song);
-        }
-
-        let new_len = self.fetch_queue().len();
-
-        // 2. If queue length grew, direct push worked!
-        if new_len > initial_queue_len {
-            return Ok(());
-        }
-
-        // 3. Otherwise, inspect directory entries and push files individually
-        let entries = self.fetch_directory(path, false);
-        for entry in entries {
-            if entry.is_dir {
-                let _ = self.push_path_recursive(&entry.path);
-            } else if let Some(client) = self.client.as_mut() {
-                let song = mpd::Song {
-                    file: entry.path,
-                    ..Default::default()
-                };
-                let _ = client.push(song);
+            if client.push(song).is_ok() {
+                if self.fetch_queue().len() > initial_queue_len {
+                    return Ok(());
+                }
             }
         }
 
-        Ok(())
+        // 2. If path is a directory, inspect directory entries and push files individually
+        let entries = self.fetch_directory(path, false);
+        if !entries.is_empty() {
+            for entry in &entries {
+                if entry.is_dir {
+                    let _ = self.push_path_recursive(&entry.path);
+                } else if let Some(client) = self.client.as_mut() {
+                    let song = mpd::Song {
+                        file: entry.path.clone(),
+                        ..Default::default()
+                    };
+                    let _ = client.push(song);
+                }
+            }
+            if self.fetch_queue().len() > initial_queue_len {
+                return Ok(());
+            }
+        }
+
+        // 3. If pushing failed (e.g. file is on disk but not yet indexed in MPD's DB), trigger MPD DB update & retry
+        if let Some(client) = self.client.as_mut() {
+            let _ = client.update();
+            std::thread::sleep(Duration::from_millis(150));
+            let song = mpd::Song {
+                file: path.to_string(),
+                ..Default::default()
+            };
+            if client.push(song).is_ok() {
+                if self.fetch_queue().len() > initial_queue_len {
+                    return Ok(());
+                }
+            }
+        }
+
+        let final_len = self.fetch_queue().len();
+        if final_len > initial_queue_len {
+            Ok(())
+        } else {
+            anyhow::bail!("Failed to add '{}' to MPD queue", path)
+        }
     }
 
     pub fn execute(&mut self, cmd: MpdCommand) -> Result<()> {
@@ -372,6 +395,11 @@ impl MpdController {
                             }
                         }
                     }
+                }
+            }
+            MpdCommand::UpdateDb => {
+                if let Some(client) = self.client.as_mut() {
+                    let _ = client.update()?;
                 }
             }
         }
