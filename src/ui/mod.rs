@@ -26,6 +26,8 @@ pub fn render_ui(frame: &mut Frame, app: &AppState) {
 
     if app.show_help {
         render_help_modal(frame);
+    } else if app.show_archive_settings {
+        render_archive_settings_modal(frame, app);
     }
 }
 
@@ -104,6 +106,16 @@ fn render_header(frame: &mut Frame, app: &AppState, area: Rect) {
         Span::styled("[Resume: OFF] ", Style::default().fg(Color::DarkGray))
     };
 
+    let archive_cfg = &app.persistent_state.auto_archive;
+    let archive_badge = if archive_cfg.enabled {
+        Span::styled(
+            format!("[Archive: {}%/{}x] ", archive_cfg.completion_percent, archive_cfg.required_listens),
+            Style::default().fg(Color::LightCyan),
+        )
+    } else {
+        Span::styled("[Archive: OFF] ", Style::default().fg(Color::DarkGray))
+    };
+
     let vol_text = if app.status.volume >= 0 {
         format!("🔊 {}%", app.status.volume)
     } else {
@@ -119,6 +131,7 @@ fn render_header(frame: &mut Frame, app: &AppState, area: Rect) {
         random_badge,
         single_badge,
         resume_badge,
+        archive_badge,
         Span::raw("│ "),
         Span::styled(vol_text, Style::default().fg(Color::LightYellow)),
     ];
@@ -287,17 +300,31 @@ fn render_playlist_pane(frame: &mut Frame, app: &AppState, area: Rect) {
                 "  "
             };
 
-            let style = if is_selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Rgb(255, 192, 203))
-                    .add_modifier(Modifier::BOLD)
+            let (pos_style, title_style, artist_style, dur_style, badge_style) = if is_selected {
+                let bg = Color::Rgb(255, 192, 203);
+                (
+                    Style::default().bg(bg).fg(Color::Rgb(60, 20, 50)).add_modifier(Modifier::BOLD),
+                    Style::default().bg(bg).fg(Color::Black).add_modifier(Modifier::BOLD),
+                    Style::default().bg(bg).fg(Color::Rgb(50, 20, 60)),
+                    Style::default().bg(bg).fg(Color::Black).add_modifier(Modifier::BOLD),
+                    Style::default().bg(bg).fg(Color::Rgb(0, 40, 90)).add_modifier(Modifier::BOLD),
+                )
             } else if is_playing {
-                Style::default()
-                    .fg(Color::LightGreen)
-                    .add_modifier(Modifier::BOLD)
+                (
+                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::LightCyan),
+                    Style::default().fg(Color::LightYellow),
+                    Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD),
+                )
             } else {
-                Style::default().fg(Color::White)
+                (
+                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::White),
+                    Style::default().fg(Color::LightCyan),
+                    Style::default().fg(Color::LightYellow),
+                    Style::default().fg(Color::Rgb(255, 182, 193)), // Bright Light Pink
+                )
             };
 
             let dur_str = song
@@ -305,12 +332,37 @@ fn render_playlist_pane(frame: &mut Frame, app: &AppState, area: Rect) {
                 .map(|d| format!("{:02}:{:02}", d.as_secs() / 60, d.as_secs() % 60))
                 .unwrap_or_else(|| "--:--".into());
 
+            let archive_cfg = &app.persistent_state.auto_archive;
+            let accum_secs = app.persistent_state.listen_times_secs.get(&song.file).copied().unwrap_or(0.0);
+            let total_dur = song.duration.map(|d| d.as_secs_f64()).unwrap_or(0.0);
+
+            let archive_badge = if archive_cfg.enabled && total_dur > 0.0 {
+                let req_listens = archive_cfg.required_listens;
+                let comp_ratio = archive_cfg.completion_percent as f64 / 100.0;
+                let single_req = comp_ratio * total_dur;
+                let total_req = req_listens as f64 * single_req;
+
+                let current_plays = (accum_secs / single_req).floor() as u32;
+                let remaining_secs = (total_req - accum_secs).max(0.0) as u64;
+
+                let rem_m = remaining_secs / 60;
+                let rem_s = remaining_secs % 60;
+
+                Span::styled(
+                    format!(" [ {}/{}x • {:02}:{:02} left ]", current_plays, req_listens, rem_m, rem_s),
+                    badge_style,
+                )
+            } else {
+                Span::raw("")
+            };
+
             let line_spans = vec![
-                Span::styled(format!("{:2} ", cursor), style),
-                Span::styled(format!("{:3}. ", song.pos + 1), Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{} ", song.title), style),
-                Span::styled(format!("— {} ", song.artist), Style::default().fg(Color::Gray)),
-                Span::styled(format!("({})", dur_str), Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:2} ", cursor), title_style),
+                Span::styled(format!("{:3}. ", song.pos + 1), pos_style),
+                Span::styled(format!("{} ", song.title), title_style),
+                Span::styled(format!("— {} ", song.artist), artist_style),
+                Span::styled(format!("({})", dur_str), dur_style),
+                archive_badge,
             ];
 
             ListItem::new(Line::from(line_spans))
@@ -329,6 +381,8 @@ fn render_footer(frame: &mut Frame, _app: &AppState, area: Rect) {
         Span::raw("Play/Pause  "),
         Span::styled(" [i] ", Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD)),
         Span::raw("Immersion  "),
+        Span::styled(" [A] ", Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)),
+        Span::raw("Auto-Archive  "),
         Span::styled(" [m] ", Style::default().fg(Color::LightYellow)),
         Span::raw("Resume  "),
         Span::styled(" [r] ", Style::default().fg(Color::LightGreen)),
@@ -356,13 +410,83 @@ fn render_footer(frame: &mut Frame, _app: &AppState, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
+fn render_archive_settings_modal(frame: &mut Frame, app: &AppState) {
+    let area = frame.area();
+    let popup_area = Rect {
+        x: area.width.saturating_sub(62) / 2,
+        y: area.height.saturating_sub(18) / 2,
+        width: 62.min(area.width),
+        height: 18.min(area.height),
+    };
+
+    frame.render_widget(Clear, popup_area);
+
+    let cfg = &app.persistent_state.auto_archive;
+
+    let items = vec![
+        Line::from(Span::styled(
+            " 📦 Auto-Archive Settings (AJATT Immersion) ",
+            Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(if app.archive_settings_selected == 0 { "▸ " } else { "  " }, Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD)),
+            Span::styled("Auto-Archive Mode:     ", Style::default().fg(Color::White)),
+            if cfg.enabled {
+                Span::styled("[ ENABLED ]", Style::default().bg(Color::Green).fg(Color::Black).add_modifier(Modifier::BOLD))
+            } else {
+                Span::styled("[ DISABLED ]", Style::default().bg(Color::DarkGray).fg(Color::White))
+            },
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(if app.archive_settings_selected == 1 { "▸ " } else { "  " }, Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD)),
+            Span::styled("Completion Threshold:  ", Style::default().fg(Color::White)),
+            Span::styled(format!("< {:2}% >", cfg.completion_percent), Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" (min % track duration listened)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(if app.archive_settings_selected == 2 { "▸ " } else { "  " }, Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD)),
+            Span::styled("Required Listens:      ", Style::default().fg(Color::White)),
+            Span::styled(format!("< {} listen(s) >", cfg.required_listens), Style::default().fg(Color::LightYellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" (complete plays to move track)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(if app.archive_settings_selected == 3 { "▸ " } else { "  " }, Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD)),
+            Span::styled("Archive Directory:     ", Style::default().fg(Color::White)),
+            Span::styled(format!("[ {} ]", cfg.archive_dir), Style::default().fg(Color::LightCyan)),
+        ]),
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Controls: [k/j or ↑/↓] Select field  [h/l or ←/→/Space] Adjust value  [Esc] Save & Exit",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        )),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(Color::Rgb(255, 182, 193)))
+        .style(Style::default().bg(Color::Rgb(25, 25, 35)));
+
+    let paragraph = Paragraph::new(items)
+        .block(block)
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true });
+
+    frame.render_widget(paragraph, popup_area);
+}
+
 fn render_help_modal(frame: &mut Frame) {
     let area = frame.area();
     let popup_area = Rect {
         x: area.width.saturating_sub(62) / 2,
-        y: area.height.saturating_sub(24) / 2,
+        y: area.height.saturating_sub(26) / 2,
         width: 62.min(area.width),
-        height: 24.min(area.height),
+        height: 26.min(area.height),
     };
 
     frame.render_widget(Clear, popup_area);
@@ -382,8 +506,12 @@ fn render_help_modal(frame: &mut Frame) {
             Span::raw("Toggle Play / Pause"),
         ]),
         Line::from(vec![
+            Span::styled(" A (Shift+A)    ", Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)),
+            Span::raw("Open Auto-Archive Config Modal"),
+        ]),
+        Line::from(vec![
             Span::styled(" m              ", Style::default().fg(Color::LightYellow)),
-            Span::raw("Toggle Resume Mode (Remember exact playback position)"),
+            Span::raw("Toggle Resume Mode (Remember exact position)"),
         ]),
         Line::from(vec![
             Span::styled(" i              ", Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD)),
@@ -454,3 +582,4 @@ fn render_help_modal(frame: &mut Frame) {
 
     frame.render_widget(paragraph, popup_area);
 }
+

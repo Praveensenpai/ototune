@@ -1,6 +1,26 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoArchiveConfig {
+    pub enabled: bool,
+    pub completion_percent: u8,
+    pub required_listens: u32,
+    pub archive_dir: String,
+}
+
+impl Default for AutoArchiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            completion_percent: 90,
+            required_listens: 3,
+            archive_dir: "archive".to_string(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistentState {
@@ -9,6 +29,12 @@ pub struct PersistentState {
     pub last_elapsed_secs: u64,
     pub resume_mode: bool,
     pub show_hidden: bool,
+    #[serde(default)]
+    pub auto_archive: AutoArchiveConfig,
+    #[serde(default)]
+    pub play_counts: HashMap<String, u32>,
+    #[serde(default)]
+    pub listen_times_secs: HashMap<String, f64>,
 }
 
 impl Default for PersistentState {
@@ -19,6 +45,9 @@ impl Default for PersistentState {
             last_elapsed_secs: 0,
             resume_mode: true, // Resume ON by default so user position is remembered
             show_hidden: false,
+            auto_archive: AutoArchiveConfig::default(),
+            play_counts: HashMap::new(),
+            listen_times_secs: HashMap::new(),
         }
     }
 }
@@ -52,3 +81,4 @@ impl PersistentState {
         }
     }
 }
+

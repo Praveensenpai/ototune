@@ -26,10 +26,14 @@ pub struct AppState {
     pub filtered_queue_indices: Vec<usize>,
 
     pub show_help: bool,
+    pub show_archive_settings: bool,
+    pub archive_settings_selected: usize,
+
     pub notification: Option<(String, Instant)>,
     pub running: bool,
 
     pub persistent_state: PersistentState,
+    pub last_tracked_song: Option<String>,
 }
 
 impl AppState {
@@ -54,10 +58,114 @@ impl AppState {
             filtered_queue_indices: Vec::new(),
 
             show_help: false,
+            show_archive_settings: false,
+            archive_settings_selected: 0,
+
             notification: None,
             running: true,
 
             persistent_state: persistent,
+            last_tracked_song: None,
+        }
+    }
+
+    pub fn check_auto_archive(&mut self, controller: &mut crate::mpd_client::MpdController, delta_secs: f64) {
+        let current_file = self.status.current_song.as_ref().map(|s| s.file.clone());
+
+        // 1. Detect track transition: when track finishes or user switches tracks
+        if self.last_tracked_song != current_file {
+            if let Some(prev_file) = self.last_tracked_song.take() {
+                let accum_secs = self.persistent_state.listen_times_secs.get(&prev_file).copied().unwrap_or(0.0);
+                
+                let total_dur = self.queue.iter().find(|s| s.file == prev_file)
+                    .and_then(|s| s.duration)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+
+                if total_dur > 0.0 {
+                    let req_listens = self.persistent_state.auto_archive.required_listens as f64;
+                    let comp_ratio = self.persistent_state.auto_archive.completion_percent as f64 / 100.0;
+                    let total_req_secs = req_listens * comp_ratio * total_dur;
+
+                    if accum_secs >= total_req_secs && self.persistent_state.auto_archive.enabled {
+                        // Track completed listening quota! Archive now that it finished playing.
+                        if self.archive_file_on_disk(&prev_file, controller) {
+                            self.persistent_state.listen_times_secs.remove(&prev_file);
+                            self.persistent_state.play_counts.remove(&prev_file);
+                            self.set_notification(format!(
+                                "📦 Auto-archived completed track: '{}'",
+                                get_filename_fallback(&prev_file)
+                            ));
+                        }
+                    }
+                }
+            }
+            self.last_tracked_song = current_file.clone();
+        }
+
+        // 2. Accumulate actual wall-clock playback duration while track is playing
+        if self.status.state == crate::mpd_client::PlaybackState::Playing {
+            if let Some(song) = self.status.current_song.clone() {
+                let file = song.file.clone();
+                let total_duration_secs = song.duration.map(|d| d.as_secs_f64()).unwrap_or(0.0);
+
+                if total_duration_secs > 0.0 {
+                    let entry = self.persistent_state.listen_times_secs.entry(file.clone()).or_insert(0.0);
+                    *entry += delta_secs;
+                    let accumulated_secs = *entry;
+
+                    let _req_listens = self.persistent_state.auto_archive.required_listens as f64;
+                    let completion_ratio = self.persistent_state.auto_archive.completion_percent as f64 / 100.0;
+                    let single_listen_req = completion_ratio * total_duration_secs;
+
+                    // Update estimated play count badge
+                    let current_plays = (accumulated_secs / single_listen_req).floor() as u32;
+                    self.persistent_state.play_counts.insert(file.clone(), current_plays);
+                }
+            }
+        }
+    }
+
+    fn archive_file_on_disk(&mut self, rel_path: &str, controller: &mut crate::mpd_client::MpdController) -> bool {
+        let home = match std::env::var("HOME") {
+            Ok(h) => h,
+            Err(_) => return false,
+        };
+        let music_base = std::path::PathBuf::from(home).join("Music").join("immersionpod");
+        let src_path = music_base.join(rel_path);
+
+        if !src_path.exists() {
+            return false;
+        }
+
+        let file_name = match src_path.file_name() {
+            Some(n) => n,
+            None => return false,
+        };
+
+        let archive_dir_name = &self.persistent_state.auto_archive.archive_dir;
+        let archive_dir = music_base.join(archive_dir_name);
+        if let Err(_) = std::fs::create_dir_all(&archive_dir) {
+            return false;
+        }
+
+        let dst_path = archive_dir.join(file_name);
+
+        // Try renaming or fallback to copy+delete
+        let moved = if std::fs::rename(&src_path, &dst_path).is_ok() {
+            true
+        } else if std::fs::copy(&src_path, &dst_path).is_ok() {
+            let _ = std::fs::remove_file(&src_path);
+            true
+        } else {
+            false
+        };
+
+        if moved {
+            let _ = controller.execute(crate::mpd_client::MpdCommand::UpdateDb);
+            true
+        } else {
+            false
         }
     }
 
@@ -195,3 +303,11 @@ impl AppState {
         }
     }
 }
+
+fn get_filename_fallback(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string())
+}
+

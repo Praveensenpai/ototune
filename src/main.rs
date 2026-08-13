@@ -23,7 +23,7 @@ use std::{
 #[command(
     name = "ototune",
     author = "Praveen Senpai",
-    version = "0.2.2",
+    version = "0.2.3",
     about = "Minimal aesthetic Rust TUI MPD player tailored for daily listening and AJATT audio immersion"
 )]
 struct Args {
@@ -104,6 +104,7 @@ async fn main() -> Result<()> {
     }
 
     let mut last_tick = Instant::now();
+    let mut last_save = Instant::now();
     let tick_rate = Duration::from_millis(250);
 
     while app.running {
@@ -117,6 +118,7 @@ async fn main() -> Result<()> {
         }
 
         if last_tick.elapsed() >= tick_rate {
+            let delta_secs = last_tick.elapsed().as_secs_f64();
             app.status = controller.fetch_status();
             let new_queue = controller.fetch_queue();
             if new_queue.len() != app.queue.len() {
@@ -125,7 +127,14 @@ async fn main() -> Result<()> {
             } else {
                 app.queue = new_queue;
             }
-            app.save_current_state();
+            app.check_auto_archive(&mut controller, delta_secs);
+
+            // Save state to disk once per second (1000ms) instead of 250ms to minimize disk I/O
+            if last_save.elapsed() >= Duration::from_secs(1) {
+                app.save_current_state();
+                last_save = Instant::now();
+            }
+
             last_tick = Instant::now();
         }
     }
@@ -140,6 +149,58 @@ async fn main() -> Result<()> {
 }
 
 fn handle_key_event(app: &mut AppState, controller: &mut MpdController, key: crossterm::event::KeyEvent) {
+    if app.show_archive_settings {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.show_archive_settings = false;
+                app.save_current_state();
+                app.set_notification("📦 Saved Auto-Archive Settings");
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.archive_settings_selected = app.archive_settings_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.archive_settings_selected = (app.archive_settings_selected + 1).min(3);
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                match app.archive_settings_selected {
+                    0 => {
+                        app.persistent_state.auto_archive.enabled = !app.persistent_state.auto_archive.enabled;
+                    }
+                    1 => {
+                        app.persistent_state.auto_archive.completion_percent =
+                            app.persistent_state.auto_archive.completion_percent.saturating_sub(5).max(50);
+                    }
+                    2 => {
+                        app.persistent_state.auto_archive.required_listens =
+                            app.persistent_state.auto_archive.required_listens.saturating_sub(1).max(1);
+                    }
+                    _ => {}
+                }
+                app.save_current_state();
+            }
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') | KeyCode::Enter => {
+                match app.archive_settings_selected {
+                    0 => {
+                        app.persistent_state.auto_archive.enabled = !app.persistent_state.auto_archive.enabled;
+                    }
+                    1 => {
+                        app.persistent_state.auto_archive.completion_percent =
+                            (app.persistent_state.auto_archive.completion_percent + 5).min(100);
+                    }
+                    2 => {
+                        app.persistent_state.auto_archive.required_listens =
+                            (app.persistent_state.auto_archive.required_listens + 1).min(20);
+                    }
+                    _ => {}
+                }
+                app.save_current_state();
+            }
+            _ => {}
+        }
+        return;
+    }
+
     if app.search_mode {
         match key.code {
             KeyCode::Esc => {
@@ -173,6 +234,9 @@ fn handle_key_event(app: &mut AppState, controller: &mut MpdController, key: cro
     }
 
     match key.code {
+        KeyCode::Char('A') | KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::SHIFT) || key.code == KeyCode::Char('A') => {
+            app.show_archive_settings = true;
+        }
         KeyCode::Char('q') => {
             app.running = false;
         }
